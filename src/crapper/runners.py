@@ -70,7 +70,7 @@ def _clean_dir(path: Path) -> None:
         shutil.rmtree(path)
 
 
-_COVERAGE_DIRS = {"typescript", "rust", "go", "python"}
+_COVERAGE_DIRS = {"typescript", "rust", "go", "python", "csharp"}
 
 
 def _outside_language_dirs(coverage: Path, path: Path) -> bool:
@@ -562,6 +562,65 @@ def _cover_rust(root: Path, files: list[Path]) -> None:
             _warn(f"Rust coverage exited {code} in {module}. Rust coverage will score 0%.")
 
 
+def dotnet_target(root: Path) -> Path:
+    targets = sorted(p for p in root.iterdir() if p.suffix in {".sln", ".slnx"})
+    if len(targets) != 1:
+        raise ValueError("C# requires one solution (.sln or .slnx) in --root; otherwise supply an explicit test/coverage command")
+    return targets[0]
+
+
+def _cover_csharp_console(root: Path, target: Path, output: Path) -> int:
+    code = run_shell(["dotnet", "build", target.name, "-c", "Debug", "--nologo"], root)
+    if code:
+        return code
+    projects = subprocess.run(["dotnet", "sln", target.name, "list"], cwd=root,
+                              capture_output=True, text=True, check=True).stdout.splitlines()
+    count = 0
+    for name in projects:
+        if not name.strip().endswith(".csproj"):
+            continue
+        project = name.strip()
+        query = subprocess.run(["dotnet", "msbuild", project, "-nologo",
+                                "-getProperty:IsTestProject,TargetPath", "-property:Configuration=Debug"],
+                               cwd=root, capture_output=True, text=True, check=True)
+        properties = json.loads(query.stdout)["Properties"]
+        if properties["IsTestProject"].lower() != "true":
+            continue
+        assembly = Path(properties["TargetPath"])
+        if not assembly.is_absolute():
+            assembly = root / assembly
+        report = output / f"{count}.coverage.cobertura.xml"
+        command = ["coverlet", str(assembly.parent), "--target", "dotnet", "--targetargs",
+                   shlex.join(["test", project, "-c", "Debug", "--no-build"]),
+                   "--format", "cobertura", "--output", str(report),
+                   "--exclude", f"[{assembly.stem}]*", "--exclude", "[xunit*]*",
+                   "--exclude-by-attribute", "GeneratedCodeAttribute", "--skipautoprops"]
+        code = run_shell(command, root)
+        if code or not report.is_file():
+            return code or 1
+        count += 1
+    if not count:
+        _warn("No IsTestProject=true projects in the solution; no C# coverage was collected.")
+        return 1
+    return 0
+
+
+def _cover_csharp(root: Path) -> int:
+    target = dotnet_target(root)
+    report = root / "target/coverage/csharp/coverage.cobertura.xml"
+    _prepare_report(report)
+    if shutil.which("coverlet"):
+        return _cover_csharp_console(root, target, report.parent)
+    code = run_shell(["dotnet", "test", target.name, "--nologo", "--collect:XPlat Code Coverage",
+                      "--results-directory", str(report.parent)], root)
+    if code:
+        return code
+    if not list(report.parent.glob("**/*cobertura*.xml")):
+        _warn("No Cobertura report. Install coverlet.collector in the test project, or use --coverage-command with Coverlet console for Microsoft.Testing.Platform.")
+        return 1
+    return 0
+
+
 def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
     """Generate coverage reports for the languages present in `files`.
 
@@ -593,4 +652,6 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
         _cover_python(root, files)
     if "rust" in languages:
         _cover_rust(root, files)
+    if "csharp" in languages:
+        return _cover_csharp(root)
     return 0

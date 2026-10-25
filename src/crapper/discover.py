@@ -9,6 +9,7 @@ EXTENSIONS = {
     ".cljs": "clojure",
     ".bb": "clojure",
     ".java": "java",
+    ".cs": "csharp",
     ".go": "go",
     ".ts": "typescript",
     ".tsx": "typescript",
@@ -24,6 +25,7 @@ EXTENSIONS = {
 
 SKIP_DIRS = {
     ".git",
+    "bin", "obj", "TestResults", ".worktrees",
     ".hg",
     ".svn",
     ".idea",
@@ -69,6 +71,8 @@ JS_TEST_SUFFIXES = (
 def language_of(path: str | Path) -> str | None:
     file_path = Path(path)
     name = file_path.name
+    if name.endswith((".g.cs", ".g.i.cs", ".generated.cs", ".Designer.cs")):
+        return None
     if name.endswith(".d.ts"):
         return None
     return EXTENSIONS.get(file_path.suffix)
@@ -77,6 +81,8 @@ def language_of(path: str | Path) -> str | None:
 def is_test_file(path: str | Path) -> bool:
     file_path = Path(path)
     name = file_path.name
+    if file_path.suffix == ".cs" and any(part.endswith((".Tests", ".Test", "Tests")) for part in file_path.parts):
+        return True
     if name.endswith(GO_TEST_SUFFIX):
         return True
     if name.endswith(CLOJURE_TEST_SUFFIXES):

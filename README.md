@@ -91,3 +91,46 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest
 ```
+
+## C# / .NET (this fork)
+
+This is a fork of [unclebob/crapper](https://github.com/unclebob/crapper).
+C# uses the existing tree-sitter dependency (`csharp` grammar), with no Roslyn
+service. Methods, constructors, operators and executable property/indexer/event
+accessors are units. Expression bodies, records, nested/file-scoped namespaces,
+generic types and overload signatures are supported. Local functions and lambdas
+stay inside their enclosing member. Top-level statements form `Program.<Main>`.
+Auto-properties, generated files, `bin`, `obj`, `TestResults` and test trees are
+skipped. A C# parse error fails the analysis instead of reporting an empty success.
+
+Complexity is source-level: entry + conditionals, loops, catch/filter decisions,
+switch sections/arms, boolean/null-coalescing operations, conditional access and
+and/or patterns. This is not the IL complexity in Coverlet's XML.
+
+```sh
+crapper --no-coverage src/Calculator.cs
+crapper --use-existing-coverage src
+crapper src
+```
+
+For automatic coverage, run from a directory containing exactly one `.sln` or
+`.slnx`, with .NET SDK installed. With `coverlet` on PATH, the tool builds Debug
+once, finds `IsTestProject=true` assemblies through MSBuild and uses Coverlet
+console for both VSTest and Microsoft.Testing.Platform (including xUnit v3):
+
+```sh
+dotnet tool install --tool-path "$HOME/.local/share/zt-ub-mode/dotnet" coverlet.console --version 6.0.4
+export PATH="$HOME/.local/share/zt-ub-mode/dotnet:$PATH"
+```
+
+Without the console tool it uses `dotnet test --collect:"XPlat Code Coverage"`;
+this requires `coverlet.collector` in VSTest test projects. Other layouts can use
+`--coverage-command`. Failed C# coverage or missing reports returns nonzero and
+does not write a new metrics snapshot.
+
+Coverlet Cobertura reports under `target/coverage/csharp`, `coverage` and
+`TestResults` are read alongside existing LCOV reports. Source paths join async
+state machines to the original source members. Line hits are merged by union;
+branch fractions use the best observed counts, conservatively (two reports
+covering different halves cannot prove full coverage without branch identities).
+Coverage is per source line, so methods sharing one line share its evidence.

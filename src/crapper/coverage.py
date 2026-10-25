@@ -558,11 +558,55 @@ def _merge_forms(root: Path) -> dict[str, dict[int, tuple[int, int]]]:
     return found
 
 
+def parse_cobertura(text: str) -> dict[str, FileCoverage]:
+    """Coverlet source lines, including async state-machine classes.
+
+    Union line hits instead of summing repeated class/method records. Branch
+    totals use the best observed fraction: Cobertura does not identify the
+    individual paths, so two 50% reports cannot prove 100% together.
+    """
+    root = ET.fromstring(text)
+    found = {}
+    for cls in root.iter("class"):
+        filename = cls.get("filename")
+        if not filename:
+            continue
+        record = found.setdefault(filename, FileCoverage())
+        lines = cls.findall("./lines/line") or cls.findall("./methods/method/lines/line")
+        for line in lines:
+            number, hits = int(line.get("number", "0")), int(line.get("hits", "0"))
+            record[number] = (max(record.get(number, (0, 1))[0], int(hits > 0)), 1)
+            branch = re.search(r"\((\d+)/(\d+)\)", line.get("condition-coverage", ""))
+            if branch:
+                covered, total = map(int, branch.groups())
+                old = record.branches.get(number, (0, 0))
+                record.branches[number] = (max(old[0], covered), max(old[1], total))
+    return found
+
+
+def _merge_cobertura(root: Path) -> dict[str, FileCoverage]:
+    paths = []
+    for directory in ("target/coverage/csharp", "coverage", "TestResults"):
+        paths.extend((root / directory).glob("**/*cobertura*.xml"))
+    merged = {}
+    for text in _merge_texts(paths):
+        for filename, incoming in parse_cobertura(text).items():
+            record = merged.setdefault(filename, FileCoverage())
+            for line, hit in incoming.items():
+                record[line] = (max(record.get(line, (0, 1))[0], hit[0]), 1)
+            for line, (covered, total) in incoming.branches.items():
+                old = record.branches.get(line, (0, 0))
+                record.branches[line] = (max(old[0], covered), max(old[1], total))
+    return merged
+
+
 def load_bundle(root: Path) -> CoverageBundle:
     go_profile = _merge_go(root)
     jacoco = _merge_jacoco(root)
+    lcov = _merge_lcov(root)
+    lcov.update(_merge_cobertura(root))
     return CoverageBundle(
-        lcov=_merge_lcov(root),
+        lcov=lcov,
         go_profile=go_profile or None,
         jacoco=jacoco or None,
         form_html=_merge_forms(root),

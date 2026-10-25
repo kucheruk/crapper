@@ -42,7 +42,7 @@ Detect the language of each source file and score it with the CRAP metric
 CRAP = CC² × (1 − coverage)³ + CC. Writes .metrics/crap.edn for uml-viewer
 and prints a report sorted worst first.
 
-Languages: Clojure (.clj .cljc .cljs .bb), Java (.java), Go (.go),
+Languages: Clojure (.clj .cljc .cljs .bb), Java (.java), Go (.go), C# (.cs),
 TypeScript and JavaScript (.ts .tsx .mts .cts .js .jsx .mjs .cjs),
 Rust (.rs), Python (.py).
 
@@ -280,13 +280,19 @@ def _show_help(options: Options) -> int:
     return options.exit_code
 
 
+class CoverageRunError(RuntimeError):
+    """The C# test run did not produce trustworthy coverage."""
+
+
 def _coverage_bundle(options: Options, root: Path, files: list[Path]):
     if options.no_coverage:
         return None
     if options.use_existing_coverage:
         return load_bundle(root)
     status = run_coverage(root, files, options.coverage_command)
-    if options.coverage_command and status not in (0, None):
+    if status not in (0, None):
+        if any(language_of(path) == "csharp" for path in files):
+            raise CoverageRunError(f"C# coverage failed (exit {status}); no metrics were written")
         return CoverageBundle()
     return load_bundle(root)
 
@@ -319,7 +325,11 @@ def run(argv: list[str] | None = None) -> int:
         print("No source files to analyze.")
         return 0
 
-    entries = analyze_files(files, root, _coverage_bundle(options, root, files))
+    try:
+        entries = analyze_files(files, root, _coverage_bundle(options, root, files))
+    except (ValueError, CoverageRunError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     metrics = write_metrics(entries, root)
     print(format_report(entries), end="", flush=True)
     print(f"Wrote {metrics}", file=sys.stderr)
